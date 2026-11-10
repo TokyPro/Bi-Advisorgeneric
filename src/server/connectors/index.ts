@@ -2,6 +2,9 @@ import { testSql, schemaSql, querySql } from './sql';
 import { testMongo, schemaMongo, queryMongo } from './mongo';
 import { testOdoo, schemaOdoo, queryOdoo } from './odoo';
 import { fetchSaas } from './saas';
+import { SqlitePathError } from './sqlite-path';
+import { ReadOnlyError, QUERY_TIMEOUT_MESSAGE } from './sql-guard';
+import { NetworkPolicyError } from '../net/policy';
 
 type Cfg = Record<string, string>;
 const isSql = (k: string) => ['postgres', 'mysql', 'mssql', 'sqlite'].includes(k);
@@ -19,7 +22,10 @@ export async function query(kind: string, c: Cfg, q: { sql?: string; odoo?: Para
 
 /** Message d'erreur lisible pour les erreurs réseau / driver fréquentes. */
 export function friendly(e: unknown): string {
+  // Messages des gardes de sécurité : déjà en français et sans donnée sensible.
+  if (e instanceof NetworkPolicyError || e instanceof SqlitePathError || e instanceof ReadOnlyError) return e.message;
   const m = (e as Error)?.message || String(e);
+  if (/maximum statement execution time|max_statement_time|statement timeout|canceling statement due to statement timeout|ETIMEOUT|Timeout: Request failed to complete/i.test(m)) return QUERY_TIMEOUT_MESSAGE;
   if (/ECONNREFUSED/.test(m)) return 'Connexion refusée : vérifiez hôte, port et pare-feu.';
   if (/ENOTFOUND|EAI_AGAIN/.test(m)) return 'Hôte introuvable : vérifiez l’adresse.';
   if (/ETIMEDOUT|timeout/i.test(m)) return 'Délai dépassé : le serveur ne répond pas.';

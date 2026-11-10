@@ -110,19 +110,19 @@ export function DbTab({ done }: { done: () => void }) {
   return <DbForm key={kind} kind={kind} setKind={setKind} done={done} />;
 }
 function DbForm({ kind, setKind, done }: { kind: SourceKind; setKind: (k: SourceKind) => void; done: () => void }) {
-  const f = useRemoteForm(kind, (c) => `${DB_KINDS.find((k) => k.id === kind)!.label} · ${c.database || c.path?.split('/').pop() || c.host || 'base'}`, done);
+  const f = useRemoteForm(kind, (c) => `${DB_KINDS.find((k) => k.id === kind)!.label} · ${c.database || c.path?.split(/[\\/]/).pop() || c.host || 'base'}`, done);
   const i = (k: string, label: string, ph = '', type = 'text') => <Field label={label}><input type={type} value={f.cfg[k] ?? ''} onChange={(e) => f.set(k, e.target.value)} placeholder={ph} className={inputCls} autoComplete="off" /></Field>;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-1.5">{DB_KINDS.map((k) => <button key={k.id} onClick={() => setKind(k.id)} className={cn('rounded-full border px-3 py-1 text-xs font-semibold', kind === k.id ? 'border-brand-violet bg-brand-violet/10 text-brand-violet' : 'border-line text-muted hover:bg-surface2')}>{k.label}</button>)}</div>
-      {kind === 'sqlite' ? i('path', 'Chemin du fichier (sur le serveur)', '/data/ma_base.sqlite')
+      {kind === 'sqlite' ? i('path', 'Fichier SQLite (dans le dossier autorisé par l’administrateur)', 'ventes.sqlite')
         : kind === 'mongodb' ? <>{i('url', 'URI de connexion', 'mongodb+srv://user:pass@cluster/…')}{i('database', 'Base (optionnel)', 'ma_base')}</>
           : <>
             <div className="grid grid-cols-3 gap-3"><div className="col-span-2">{i('host', 'Hôte', 'db.exemple.com')}</div>{i('port', 'Port', DB_KINDS.find((k) => k.id === kind)?.port)}</div>
             <div className="grid grid-cols-3 gap-3">{i('database', 'Base', 'ma_base')}{i('user', 'Utilisateur', 'lecteur_bi')}{i('password', 'Mot de passe', '••••••', 'password')}</div>
             <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={f.cfg.ssl === 'true'} onChange={(e) => f.set('ssl', String(e.target.checked))} />Connexion chiffrée (SSL/TLS)</label>
           </>}
-      <p className="text-[11.5px] text-muted">🔒 Accès <b>lecture seule</b> forcé (SELECT uniquement). Utilisez de préférence un compte dédié en lecture. Seul le schéma (tables, colonnes, clés étrangères) est transmis au LLM, jamais l’intégralité des données.</p>
+      <p className="text-[11.5px] text-muted">🔒 Accès <b>lecture seule</b> forcé (SELECT uniquement). Utilisez <b>obligatoirement</b> un compte en lecture seule : c’est la seule garantie réelle côté base. Seul le schéma (tables, colonnes, clés étrangères) est transmis au LLM, jamais l’intégralité des données.</p>
       <Status state={f.state} /><Actions f={f} />
     </div>
   );
