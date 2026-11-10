@@ -1,7 +1,5 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { RefreshCw, FileDown, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useStore } from '@/lib/store';
@@ -9,6 +7,7 @@ import { generateReport } from '@/lib/actions';
 import { exportPdf } from '@/lib/bi/export';
 import { download } from '@/lib/utils';
 import { Modal, Spinner } from '../ui/primitives';
+import SafeMarkdown from '../ui/SafeMarkdown';
 import { DndContext } from '@dnd-kit/core';
 import { SortableContext } from '@dnd-kit/sortable';
 import WidgetCard from '../canvas/WidgetCard';
@@ -48,7 +47,7 @@ export default function ReportModal() {
             <div className="text-right text-sm font-extrabold">BI Advisor</div>
           </div>
           {loading ? <div className="space-y-3">{[90, 70, 85, 60].map((w, i) => <div key={i} className="skeleton h-4" style={{ width: `${w}%` }} />)}</div> : (
-            <div className="md text-[13.5px] [&_.md]:text-inherit"><ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown></div>
+            <SafeMarkdown text={md} variant="report" className="md text-[13.5px] [&_.md]:text-inherit" />
           )}
           {!loading && widgets.length > 0 && (
             <>
