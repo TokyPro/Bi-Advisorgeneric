@@ -1,4 +1,5 @@
 import type { TableSchema } from '@/lib/types';
+import { safeFetch } from '../net/safe-fetch';
 
 type Cfg = Record<string, string>;
 
@@ -13,14 +14,16 @@ export const ODOO_MODELS: Record<string, string> = {
 
 let rpcId = 1;
 async function rpc(url: string, service: string, method: string, args: unknown[]) {
-  const res = await fetch(`${url.replace(/\/+$/, '')}/jsonrpc`, {
+  // Garde réseau commune ; une redirection (ex. http → https) est refusée : saisir l'URL https finale.
+  const res = await safeFetch(`${url.replace(/\/+$/, '')}/jsonrpc`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'call', params: { service, method, args }, id: rpcId++ }),
-    signal: AbortSignal.timeout(20000),
+    timeoutMs: 20000,
   });
   if (!res.ok) throw new Error(`Odoo HTTP ${res.status}`);
-  const j = await res.json();
-  if (j.error) throw new Error(j.error.data?.message || j.error.message || 'Erreur Odoo');
+  let j;
+  try { j = await res.json(); } catch { throw new Error("Odoo : la réponse n'est pas un JSON valide."); }
+  if (j.error) throw new Error(String(j.error.data?.message || j.error.message || 'Erreur Odoo').slice(0, 200));
   return j.result;
 }
 

@@ -1,4 +1,7 @@
 /** Connecteurs « synchronisés » : API REST générique, Airtable, Notion. Les données sont récupérées côté serveur (CORS, secrets) puis chargées dans le moteur SQL du navigateur. */
+import { safeFetch, BAD_URL_MESSAGE, type SafeFetchInit } from '../net/safe-fetch';
+import { NetworkPolicyError } from '../net/policy';
+
 type Cfg = Record<string, string>;
 type Row = Record<string, unknown>;
 export type Tables = Record<string, Row[]>;
@@ -6,17 +9,24 @@ export type Tables = Record<string, Row[]>;
 const MAX_ROWS = 5000;
 const safe = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') || 'table';
 
-async function jfetch(url: string, init: RequestInit = {}, label = 'API') {
+// Codes compris par friendly() (index.ts) ; tout autre échec réseau reste générique (jamais de cause brute renvoyée au client).
+const NET_CODES = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'];
+
+async function jfetch(url: string, init: SafeFetchInit = {}, label = 'API') {
   let res: Response;
-  try { res = await fetch(url, { ...init, signal: AbortSignal.timeout(25000) }); }
-  catch (e) { throw new Error(`${label} injoignable : ${(e as Error).cause ? String(((e as Error).cause as Error).message) : (e as Error).message}`); }
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    if (res.status === 401 || res.status === 403) throw new Error(`${label} : accès refusé (${res.status}) — vérifiez le jeton / les droits. ${t.slice(0, 120)}`);
-    if (res.status === 404) throw new Error(`${label} : ressource introuvable (404).`);
-    throw new Error(`${label} HTTP ${res.status} : ${t.slice(0, 160)}`);
+  try { res = await safeFetch(url, init); }
+  catch (e) {
+    if (e instanceof NetworkPolicyError) throw e;
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code && NET_CODES.includes(code)) throw Object.assign(new Error(code), { code });
+    throw new Error(`${label} injoignable.`);
   }
-  return res.json();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error(`${label} : accès refusé (${res.status}) — vérifiez le jeton / les droits.`);
+    if (res.status === 404) throw new Error(`${label} : ressource introuvable (404).`);
+    throw new Error(`${label} HTTP ${res.status}.`);
+  }
+  try { return await res.json(); } catch { throw new Error(`${label} : la réponse n'est pas un JSON valide.`); }
 }
 
 /** Aplatit un objet imbriqué (a.b.c) ; tableaux de scalaires -> "x, y" ; autres tableaux -> JSON. */
@@ -32,18 +42,34 @@ export function flatten(o: unknown, prefix = '', out: Row = {}, depth = 0): Row 
 }
 
 /* ------------------------------------------------------------------- REST */
+// En-têtes qui détourneraient la requête (Host forcé, smuggling, proxy) : refusés explicitement.
+const FORBIDDEN_HEADERS = ['host', 'content-length', 'transfer-encoding', 'connection', 'upgrade', 'proxy-authorization', 'te', 'trailer', 'keep-alive', 'expect'];
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const BAD_HEADERS = 'En-têtes : JSON invalide (ex. {"X-Api-Version":"2"}).';
+
+function checkHeader(name: string, value: unknown) {
+  if (!HEADER_NAME.test(name) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error(BAD_HEADERS);
+  if (FORBIDDEN_HEADERS.includes(name.toLowerCase())) throw new Error(`En-tête non autorisé : ${name}.`);
+}
+
 function restHeaders(c: Cfg): Record<string, string> {
   const h: Record<string, string> = { accept: 'application/json' };
-  if (c.headers?.trim()) { try { Object.assign(h, JSON.parse(c.headers)); } catch { throw new Error('En-têtes : JSON invalide (ex. {"X-Api-Version":"2"}).'); } }
+  if (c.headers?.trim()) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(c.headers); } catch { throw new Error(BAD_HEADERS); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(BAD_HEADERS);
+    for (const [k, v] of Object.entries(parsed)) { checkHeader(k, v); h[k] = v as string; }
+  }
   if (c.authType === 'bearer' && c.token) h.authorization = `Bearer ${c.token}`;
   if (c.authType === 'basic') h.authorization = 'Basic ' + Buffer.from(`${c.username || ''}:${c.token || ''}`).toString('base64');
-  if (c.authType === 'header' && c.authHeader && c.token) h[c.authHeader] = c.token;
+  if (c.authType === 'header' && c.authHeader && c.token) { checkHeader(c.authHeader, c.token); h[c.authHeader] = c.token; }
   return h;
 }
 const dig = (o: unknown, path?: string) => (path?.trim() ? path.trim().split('.').reduce((a: unknown, k) => (a as Row | undefined)?.[k], o) : o);
 
 export async function fetchRest(c: Cfg): Promise<Tables> {
-  if (!/^https?:\/\//i.test(c.url || '')) throw new Error('URL invalide (http:// ou https://).');
+  // La validation complète (schéma, identifiants, destination) est faite par safeFetch à chaque page.
+  if (!c.url?.trim()) throw new NetworkPolicyError(BAD_URL_MESSAGE);
   const headers = restHeaders(c);
   const maxPages = Math.min(Number(c.maxPages || 1), 20);
   let url = c.url + (c.authType === 'query' && c.authHeader && c.token ? `${c.url.includes('?') ? '&' : '?'}${encodeURIComponent(c.authHeader)}=${encodeURIComponent(c.token)}` : '');
