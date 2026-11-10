@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run",
     "postinstall": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
@@ -38,15 +39,16 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/mssql": "^9.1.5",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@types/better-sqlite3": "^7.6.11",
-    "@types/mssql": "^9.1.5",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^5.1.0"
   }
 }
