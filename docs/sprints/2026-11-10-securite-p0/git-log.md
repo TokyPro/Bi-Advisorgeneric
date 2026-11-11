@@ -46,7 +46,7 @@ Exécutés avant chaque commit sur `git diff --cached`, voir le § 7.3.
 
 ## 5. Push / merge / PR
 
-Aucun. Soumis à la GATE 3 (validation humaine séparée).
+GATE 3 franchie le 2026-11-11 : commit + merge local dans `main`, sans push ni PR (aucun remote), voir le § 8.
 
 ## 6. Plan de commits proposé (tâche orchestrateur #27) — EXÉCUTÉ tel quel (tâche #10, validation humaine « OK, plan tel quel »), voir § 7
 
@@ -351,7 +351,7 @@ Code de sortie **0** (Next.js 15.5.29) : compilation réussie, types valides, 9 
 | 7 | `093f5e5` | docs(config): documenter la politique réseau, SQLite et le compte lecture seule | 2 (+65 / −4) |
 | 8 | `c4adae1` | chore(gouvernance): versionner le workflow multi-agents Claude Code | 9 (+1000) |
 | 9 | `949f170` | docs(audit): ajouter l'audit global du 2026-11-10 | 1 (+162) |
-| 10 | voir `git log` | docs(sprint): livrables du sprint 2026-11-10-securite-p0 | 7 (ce fichier inclus) |
+| 10 | `ad14cfc` (reporté après coup) | docs(sprint): livrables du sprint 2026-11-10-securite-p0 | 7 (ce fichier inclus) |
 
 Chaque commit se termine par `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Ce fichier est inclus dans le commit 10, dont il ne peut pas contenir le hash : `git log` fait foi.
 
@@ -367,5 +367,31 @@ Chaque commit se termine par `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic
 
 ### 7.4 État final
 
-- `git status --porcelain -uall` après le commit 10 : vide. `.omc/` et `.vitest/` sont désormais ignorés.
+- `git status --porcelain -uall` après le commit 10 : **vide**. `.omc/` et `.vitest/` sont désormais ignorés. Seul ce fichier est ensuite modifié dans l'arbre de travail, pour le hash `ad14cfc`, sans nouveau commit (§ 6.5).
+- `git rev-list --count main..HEAD` : **10**. Aucun fichier interdit suivi (`git ls-files`).
+- Sortie de `git log --oneline -11` :
+
+```
+ad14cfc docs(sprint): livrables du sprint 2026-11-10-securite-p0
+949f170 docs(audit): ajouter l'audit global du 2026-11-10
+c4adae1 chore(gouvernance): versionner le workflow multi-agents Claude Code
+093f5e5 docs(config): documenter la politique réseau, SQLite et le compte lecture seule
+3f4fba4 test(securite): ajouter Vitest et couvrir les gardes du sprint
+552b6cc fix(connecteurs): confiner SQLite et imposer une lecture seule bornée en SQL
+792d358 fix(connecteurs): bloquer les requêtes serveur vers les destinations internes
+ef8c33f fix(config): restreindre img-src par une CSP
+5a07da2 fix(chat): neutraliser images et liens dangereux du Markdown LLM
+be5b70c chore(config): ignorer l'état local OMC et la sortie Vitest
+b6dd547 BI Advisor : version initiale
+```
+
 - Push, merge et PR : **aucun**, en attente de la GATE 3.
+
+## 8. GATE 3 (2026-11-11)
+
+- **Décision humaine** : « Commit + merge local ». Validation explicite donnée dans la conversation pour ces deux actions précises.
+- **Remote** : aucun n'est configuré (`git remote -v` vide). Il n'y a donc **ni push ni PR**. Aucun tag, et la branche `fix/2026-11-10-securite-p0` n'est pas supprimée.
+- **Contrôles préalables** : seul ce fichier était modifié dans l'arbre de travail (complément du § 7 : hash `ad14cfc`, sortie `git log`). Aucun fichier interdit, aucun motif de secret dans le diff.
+- **Commit 11** sur la branche : `docs(sprint): consigner la GATE 3 du sprint securite-p0`. Il ne contient que ce fichier.
+- **Merge** : `git checkout main` puis `git merge --no-ff fix/2026-11-10-securite-p0`, avec le message « Merge branch 'fix/2026-11-10-securite-p0' : sprint sécurité P0 ». Au départ, `main` était au point de bifurcation `b6dd547`, donc aucun conflit n'était possible.
+- Ce fichier est figé avant le merge, si bien que les hashs du commit 11 et du commit de merge n'y figurent pas : `git log --oneline --graph` sur `main` fait foi.
