@@ -46,7 +46,8 @@ Exécutés avant chaque commit sur `git diff --cached`, voir le § 7.3.
 
 ## 5. Push / merge / PR
 
-GATE 3 franchie le 2026-11-11 : commit + merge local dans `main`, sans push ni PR (aucun remote), voir le § 8.
+GATE 3 franchie le 2026-11-11 : commit + merge local dans `main`, sans push ni PR (aucun remote à ce moment-là), voir le § 8.
+Publication le 2026-11-11 : remote `origin` ajouté, `main` poussé et suivi (`origin/main`), branche de sprint supprimée en local, aucune PR, voir le § 9.
 
 ## 6. Plan de commits proposé (tâche orchestrateur #27) — EXÉCUTÉ tel quel (tâche #10, validation humaine « OK, plan tel quel »), voir § 7
 
@@ -395,3 +396,18 @@ b6dd547 BI Advisor : version initiale
 - **Commit 11** sur la branche : `docs(sprint): consigner la GATE 3 du sprint securite-p0`. Il ne contient que ce fichier.
 - **Merge** : `git checkout main` puis `git merge --no-ff fix/2026-11-10-securite-p0`, avec le message « Merge branch 'fix/2026-11-10-securite-p0' : sprint sécurité P0 ». Au départ, `main` était au point de bifurcation `b6dd547`, donc aucun conflit n'était possible.
 - Ce fichier est figé avant le merge, si bien que les hashs du commit 11 et du commit de merge n'y figurent pas : `git log --oneline --graph` sur `main` fait foi.
+
+## 9. Publication (2026-11-11)
+
+- **Exécutant** : l'humain lui-même, dans le terminal (préfixe `!`). Le système de permissions de Claude Code avait refusé `git remote add` au reviewer (motif « Remote Repoint ») ; ce refus n'a pas été contourné.
+- **Commandes et résultats** :
+
+| # | Commande | Résultat |
+|---|---|---|
+| 1 | `git remote add origin https://github.com/TokyPro/Bi-Advisorgeneric.git` | remote `origin` configuré |
+| 2 | `git push -u origin main` | « * [new branch] main -> main » ; `main` suit `origin/main` |
+| 3 | `git branch -d fix/2026-11-10-securite-p0` | « Deleted branch fix/2026-11-10-securite-p0 (was 7ab3140) » (suppression sûre, branche déjà fusionnée) |
+
+- **Hashs** : commit 11 (GATE 3) `7ab3140` ; merge `--no-ff` `d130a22` sur `main`. Ce sont les hashs publiés sur `origin/main`.
+- **Non réalisé** : aucune PR (le sprint était déjà fusionné localement), aucun tag, aucun `--force`, aucun `--no-verify`. La branche `fix/2026-11-10-securite-p0` n'a jamais été poussée.
+- **Mise à jour de ce fichier** : commit `docs(sprint): consigner la publication du sprint securite-p0` directement sur `main`, puis `git push origin main`, sur validation humaine explicite (« Fais le nécessaire »). Ce fichier ne peut pas contenir le hash de ce commit : `git log` fait foi.
