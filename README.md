@@ -34,9 +34,36 @@ Le LLM reçoit uniquement le **schéma** (tables, colonnes, FK) des sources acti
 
 ### Sécurité
 - BYOK : clés chiffrées localement ; envoyées au proxy uniquement le temps d'un appel, jamais loguées.
-- Connecteurs SQL/Mongo/Odoo : **lecture seule** forcée (une seule instruction SELECT, mots-clés d'écriture bloqués, `BEGIN READ ONLY` sur PostgreSQL, pipelines Mongo sans `$out/$merge`, 1000 lignes max).
+- **Compte SGBD en lecture seule obligatoire** : c'est la seule garantie réelle côté base (exemples ci-dessous). Les garde-fous applicatifs ne font que la doubler :
+  - une seule instruction commençant par `SELECT` ou `WITH` ; analyse lexicale par dialecte (chaînes, identifiants cités, commentaires) puis blocage des mots-clés et fonctions d'écriture ou d'accès fichier/réseau (`INTO`, `OPENROWSET`, `LOAD_FILE`, `pg_read_file`, `dblink`, `FOR UPDATE`…) ; commentaires `/* */` refusés ; en MySQL, chaînes contenant `\` refusées ;
+  - transaction lecture seule (PostgreSQL `BEGIN READ ONLY` + curseur, MySQL `START TRANSACTION READ ONLY`), transaction **toujours annulée** sur SQL Server, base ouverte en lecture seule (`query_only`) sur SQLite ;
+  - **1 000 lignes maximum**, limitées côté SGBD (curseur, `sql_select_limit` + lecture en flux, `SET ROWCOUNT`), et **délai de 30 s** par requête (PostgreSQL, MySQL/MariaDB, SQL Server) ; pipelines Mongo sans `$out/$merge`.
+- **Politique réseau (anti-SSRF)** : toute connexion sortante pilotée par l'utilisateur (API REST, Airtable, Notion, Odoo, URL de base LLM personnalisée, hôtes PostgreSQL/MySQL/SQL Server, URI MongoDB) est contrôlée **après résolution DNS**, et les connexions HTTP et SQL se font sur l'adresse vérifiée (anti DNS-rebinding). Par défaut (`BI_NETWORK_POLICY=public`), les adresses internes (loopback, réseaux privés, CGNAT, ULA IPv6…) sont refusées sauf si l'hôte figure dans `BI_ALLOWED_HOSTS` ; `BI_NETWORK_POLICY=allowlist` n'autorise **que** la liste blanche (recommandé en production). Les adresses link-local / métadonnées cloud (`169.254.0.0/16`, `fe80::/10`), `0.0.0.0/8`, multicast et broadcast restent **toujours** interdites. Redirections HTTP non suivies, identifiants dans l'URL refusés, réponses plafonnées à 20 Mo, corps des erreurs distantes jamais renvoyés au navigateur, options MongoDB dangereuses refusées (`proxyHost`, `tlsCAFile`, `authMechanism=MONGODB-AWS`…). Un proxy sortant filtrant au niveau de l'infrastructure reste recommandé en complément.
+- **Contenu produit par le LLM** : les images Markdown ne sont jamais chargées (un marqueur « Image non affichée (protection des données) » les remplace), seuls les liens `https:`, `mailto:` et les ancres restent cliquables (ouverts sans référent), le HTML brut est ignoré ; en-tête `Content-Security-Policy: img-src 'self' data: blob:` sur toutes les pages.
 - Les identifiants de connecteurs sont chiffrés dans le vault ; les fichiers uploadés restent dans le navigateur (non persistés).
-- Pour la production : ajoutez une authentification, un rate-limit sur `/api/*`, et exécutez le serveur dans votre réseau si les bases ne sont pas publiques.
+- Pour la production : l'authentification est intégrée (voir ci-dessous) ; servez l'application en HTTPS, renseignez `BI_ALLOWED_HOSTS` pour les cibles internes et préférez `BI_NETWORK_POLICY=allowlist`. Un rate-limit global sur `/api/*` n'est pas encore fourni (évolution prévue) : appliquez-le au niveau du reverse-proxy.
+
+#### Créer un compte en lecture seule
+PostgreSQL :
+```sql
+CREATE ROLE lecteur_bi LOGIN PASSWORD '…';
+GRANT CONNECT ON DATABASE ma_base TO lecteur_bi;
+GRANT USAGE ON SCHEMA public TO lecteur_bi;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO lecteur_bi;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO lecteur_bi;
+ALTER ROLE lecteur_bi SET default_transaction_read_only = on;
+```
+MySQL / MariaDB (sans les privilèges `FILE`, `PROCESS` ni `SUPER`) :
+```sql
+CREATE USER 'lecteur_bi'@'%' IDENTIFIED BY '…';
+GRANT SELECT, SHOW VIEW ON ma_base.* TO 'lecteur_bi'@'%';
+```
+SQL Server (ni `db_owner`, ni `sysadmin`) :
+```sql
+CREATE LOGIN lecteur_bi WITH PASSWORD = '…';
+CREATE USER lecteur_bi FOR LOGIN lecteur_bi;
+ALTER ROLE db_datareader ADD MEMBER lecteur_bi;
+```
 
 ## Authentification & utilisateurs
 - **Premier accès** : un écran vous demande de créer le compte administrateur (ou définissez `ADMIN_EMAIL` / `ADMIN_PASSWORD`, voir `.env.example`).
@@ -60,8 +87,8 @@ Stockage : clés et identifiants restent chiffrés **dans le navigateur** de cha
 ## Connecteurs
 | Source | Détails |
 |---|---|
-| PostgreSQL / MySQL / SQL Server / SQLite / MongoDB | Test de connexion, inspection du schéma (FK incluses), requêtes lecture seule. SQLite : chemin de fichier **côté serveur**. |
-| Odoo | JSON-RPC (URL, base, utilisateur, clé API). Modèles analysés : sale.order(.line), purchase.order(.line), account.move(.line), crm.lead, stock.quant, product.product, res.partner. Requêtes `search_read` / `read_group`. |
+| PostgreSQL / MySQL / SQL Server / SQLite / MongoDB | Test de connexion, inspection du schéma (FK incluses), requêtes lecture seule avec un **compte SGBD en lecture seule obligatoire**. Hôte, port et identifiants uniquement (chaînes de connexion refusées, sauf l'URI MongoDB) ; SQL Server : `hote\INSTANCE` accepté. SQLite : fichier `.sqlite`, `.sqlite3` ou `.db` situé dans le dossier **`BI_SQLITE_DIR`** du serveur (nom relatif, ex. `ventes.sqlite`) ; SQLite est désactivé si la variable n'est pas définie. |
+| Odoo | JSON-RPC (URL, base, utilisateur, clé API). Saisissez l'URL **finale** en `https://` (les redirections ne sont pas suivies). Modèles analysés : sale.order(.line), purchase.order(.line), account.move(.line), crm.lead, stock.quant, product.product, res.partner. Requêtes `search_read` / `read_group`. |
 | Google Sheets / Drive | OAuth2 (Google Identity Services) avec **votre** Client ID, sélecteur de feuilles Drive ; ou feuille publique + clé API. Nécessite d'ajouter l'URL de l'app aux origines JS autorisées. |
 | API REST / JSON | Tout endpoint HTTP (GET/POST), auth Bearer / Basic / en-tête / paramètre d'URL, chemin des données (`data.items`), pagination par paramètre, objets imbriqués aplatis (`client_name`). |
 | Airtable | Jeton d'accès personnel + ID de base : toutes les tables et leurs enregistrements. |
@@ -69,6 +96,21 @@ Stockage : clés et identifiants restent chiffrés **dans le navigateur** de cha
 | Fichiers | Excel multi-onglets, CSV (types auto), PDF (texte + tableaux détectés), DOCX, TXT. Texte → RAG local (embeddings hachés, sans réseau). |
 
 Les sources API (REST, Airtable, Notion) sont lues côté serveur (5 000 lignes max/table), chargées dans le moteur SQL du navigateur et **resynchronisées à chaque démarrage**.
+
+Les connexions vers des adresses **internes** (base sur le réseau local, `localhost`, NIM auto-hébergé, API intranet) nécessitent que l'administrateur les ajoute à `BI_ALLOWED_HOSTS` (voir `.env.example`). Préférez des entrées IP/CIDR pour les cibles internes : une entrée par nom autorise toutes les adresses vers lesquelles ce nom est résolu.
+
+## Notes de migration (correctifs de sécurité de novembre 2026)
+Changements susceptibles de casser une installation existante :
+- **Destinations internes bloquées** : bases, API REST, Odoo ou NIM sur `localhost` / réseau privé → ajoutez-les à `BI_ALLOWED_HOSTS` (ex. `localhost:8000,10.0.0.0/8,db.interne.local:5432`).
+- **SQLite désactivé par défaut** : définissez `BI_SQLITE_DIR` (jamais le dossier `data/`), placez-y les bases et ressaisissez le chemin sous la forme `ventes.sqlite`.
+- **Requêtes SQL** : seules `SELECT` / `WITH` sont acceptées (`SHOW`, `DESCRIBE`, `EXPLAIN`, `PRAGMA` ne le sont plus) ; commentaires `/* */` refusés (utilisez `--`) ; en MySQL, chaînes contenant `\` refusées ; un nom de colonne égal à un mot-clé bloqué (`set`, `lock`, `begin`, `save`… et, en SQL Server, `open`, `close`, `use`…) doit être cité ; en SQL Server, une requête contenant plusieurs instructions sans `;` est refusée.
+- **SQL Server, littéraux numériques** : un nombre (`1`, `1.5`, `1e3`, `$10`, `0x1F`) doit être séparé du mot qui le suit par un espace ou un opérateur (`1 FROM`, pas `1FROM`), sinon la requête est refusée ; `raiserror` et `add` rejoignent la liste des mots bloqués.
+- **Caractères de contrôle** (tous dialectes, littéraux compris) : une requête contenant un retour chariot isolé (`\r` non suivi de `\n`), un autre caractère de contrôle (hors tabulation et fin de ligne) ou `U+2028`/`U+2029` est refusée ; pour un tel caractère dans une valeur, utilisez `CHR(13)` (PostgreSQL) ou `CHAR(13)` (MySQL, SQL Server, SQLite).
+- **PostgreSQL** : la session impose `standard_conforming_strings=on` ; un intermédiaire (pooler) qui ignore ce paramètre de démarrage rend le connecteur inutilisable (message explicite).
+- **Chaînes de connexion SQL** (`url`) refusées : renseignez hôte, port et identifiants.
+- **Redirections HTTP non suivies** (API REST, Odoo, URL de base LLM) : indiquez l'URL finale.
+- **URL de base LLM** : acceptée uniquement pour OpenAI, DeepSeek et NVIDIA NIM (refusée pour Anthropic et Gemini) ; en `http://`, uniquement pour un hôte en liste blanche.
+- **MongoDB** : options `proxyHost`, `tlsCAFile`, `tlsCertificateKeyFile`, `authMechanismProperties`, `srvServiceName` et mécanismes `MONGODB-AWS`, `MONGODB-OIDC`, `GSSAPI`, `MONGODB-X509`, `PLAIN` refusés.
 
 ## Fonctionnalités BI
 Auto-EDA à la connexion (3–5 questions, générées par le LLM ou heuristique), détection d'anomalies (pics/creux/baisses signalés sur les graphiques), rapport exécutif (Markdown + annexes graphiques, export PDF), exports PNG / CSV / Excel, widgets réorganisables par glisser-déposer, citation de tables avec `@`, bascule de modèle à chaud, thème clair/sombre.

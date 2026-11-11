@@ -2,15 +2,22 @@
  * Proxy LLM (serveur). La clé API arrive par requête (BYOK) et n'est JAMAIS stockée ni loggée.
  * Chaque fournisseur est normalisé en flux de texte brut.
  */
+import { safeFetch } from './net/safe-fetch';
+import { NetworkPolicyError } from './net/policy';
+
 export type Provider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'nvidia';
 
 /** Fournisseurs compatibles API OpenAI (chat/completions). NVIDIA NIM : cloud (build.nvidia.com) ou NIM auto-hébergé via baseUrl. */
 const OPENAI_BASES: Record<string, string> = { openai: 'https://api.openai.com/v1', deepseek: 'https://api.deepseek.com', nvidia: 'https://integrate.api.nvidia.com/v1' };
 const LABEL: Record<string, string> = { openai: 'OpenAI', deepseek: 'DeepSeek', nvidia: 'NVIDIA NIM' };
-export function resolveBase(provider: string, baseUrl?: string) {
-  const b = (baseUrl?.trim() || OPENAI_BASES[provider] || '').replace(/\/+$/, '');
-  if (b && !/^https?:\/\//i.test(b)) throw new ProviderError(400, 'URL de base invalide (http:// ou https:// attendu).');
-  return b;
+/** Seuls les fournisseurs compatibles OpenAI acceptent une URL de base personnalisée. */
+export const BASEURL_PROVIDERS = ['openai', 'deepseek', 'nvidia'];
+export const BASEURL_UNSUPPORTED = 'URL de base non prise en charge pour ce fournisseur.';
+/** `custom` : URL saisie par l'utilisateur, donc soumise à la garde réseau (safeFetch) ; les bases officielles sont des hôtes constants. */
+export function resolveBase(provider: string, baseUrl?: string): { url: string; custom: boolean } {
+  const official = OPENAI_BASES[provider] || '';
+  const b = (baseUrl?.trim() || '').replace(/\/+$/, '');
+  return !b || b === official ? { url: official, custom: false } : { url: b, custom: true };
 }
 export interface Msg { role: 'user' | 'assistant'; content: string }
 
@@ -37,12 +44,20 @@ export class ProviderError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-async function ensureOk(res: Response, provider: string) {
+async function ensureOk(res: Response, provider: string, custom = false) {
   if (res.ok) return;
   let detail = '';
-  try { const j = await res.json(); detail = j?.error?.message || j?.error || j?.message || JSON.stringify(j); } catch { detail = res.statusText; }
+  // Le corps d'une URL personnalisée n'est jamais renvoyé (cible arbitraire) ; pour un fournisseur officiel, seul son message d'erreur, tronqué.
+  if (custom) await res.body?.cancel().catch(() => undefined);
+  else {
+    try {
+      const j = await res.json();
+      const m = j?.error?.message ?? (typeof j?.error === 'string' ? j.error : j?.message);
+      if (typeof m === 'string') detail = m.slice(0, 200);
+    } catch { detail = ''; }
+  }
   const hint = res.status === 401 || res.status === 403 ? 'Clé API invalide ou non autorisée.' : res.status === 429 ? 'Quota / limite de débit atteint.' : res.status === 404 ? 'Modèle indisponible pour votre compte (listé par le fournisseur mais non activé / non déployé).' : '';
-  throw new ProviderError(res.status, `${provider} (${res.status}) ${hint} ${typeof detail === 'string' ? detail : ''}`.trim());
+  throw new ProviderError(res.status, `${provider} (${res.status}) ${hint} ${detail}`.trim());
 }
 
 export async function streamChat(p: { provider: Provider; model: string; apiKey: string; system: string; messages: Msg[]; maxTokens?: number; temperature?: number; baseUrl?: string }): Promise<ReadableStream<Uint8Array>> {
@@ -69,14 +84,17 @@ export async function streamChat(p: { provider: Provider; model: string; apiKey:
   }
 
   if (provider === 'openai' || provider === 'deepseek' || provider === 'nvidia') {
-    const url = `${resolveBase(provider, p.baseUrl)}/chat/completions`;
+    const base = resolveBase(provider, p.baseUrl);
+    const url = `${base.url}/chat/completions`;
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-    const res = await fetch(url, {
-      method: 'POST', headers,
+    const init = {
+      method: 'POST' as const, headers,
       body: JSON.stringify({ model, stream: true, max_tokens: maxTokens, ...(p.temperature != null ? { temperature: p.temperature } : {}), messages: [{ role: 'system', content: system }, ...messages] }),
-    });
-    await ensureOk(res, LABEL[provider]);
+    };
+    // Flux : délai sur l'obtention des en-têtes uniquement, taille non plafonnée.
+    const res = base.custom ? await safeFetch(url, { ...init, httpsRequiredUnlessAllowlisted: true, timeoutMs: 30_000, maxBytes: null }) : await fetch(url, init);
+    await ensureOk(res, LABEL[provider], base.custom);
     return new ReadableStream({
       async start(ctrl) {
         try {
@@ -118,8 +136,10 @@ export interface RemoteModel { id: string; label: string; context?: number; crea
 /** Modèles non conversationnels (embeddings, audio, image, modération…) exclus de la liste. */
 const NOT_CHAT = /(embed|whisper|tts|dall-e|audio|realtime|transcri|moderation|image|imagen|veo|rerank|guard|safety|reward|clip|parse|aqa|speech|vision-preview|babbage|davinci|-instruct-\d{4}$)/i;
 
-async function getJson(url: string, headers: Record<string, string>) {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+async function getJson(url: string, headers: Record<string, string>, custom = false) {
+  const res = custom
+    ? await safeFetch(url, { headers, timeoutMs: 20_000, maxBytes: 5 * 1024 * 1024, httpsRequiredUnlessAllowlisted: true })
+    : await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new ProviderError(res.status, res.status === 401 || res.status === 403 || res.status === 400 ? 'Clé API refusée par le fournisseur.' : res.status === 429 ? 'Limite de débit atteinte, réessayez dans un instant.' : `Erreur fournisseur (${res.status}).`);
   return res.json();
 }
@@ -146,7 +166,8 @@ export async function testKey(provider: Provider, apiKey: string, baseUrl?: stri
         if (!j.nextPageToken) break; token = j.nextPageToken;
       }
     } else {
-      const j = await getJson(`${resolveBase(provider, baseUrl)}/models`, apiKey ? { authorization: `Bearer ${apiKey}` } : {});
+      const base = resolveBase(provider, baseUrl);
+      const j = await getJson(`${base.url}/models`, apiKey ? { authorization: `Bearer ${apiKey}` } : {}, base.custom);
       models = (j.data || []).map((m: { id: string; created?: number }) => ({ id: m.id, label: m.id, created: m.created ? m.created * 1000 : undefined }));
     }
     const seen = new Set<string>();
@@ -154,6 +175,6 @@ export async function testKey(provider: Provider, apiKey: string, baseUrl?: stri
     models.sort((a, b) => (b.created ?? 0) - (a.created ?? 0) || a.id.localeCompare(b.id));
     return { ok: true, message: models.length ? `Connexion établie · ${models.length} modèle(s) disponible(s)` : 'Clé valide, mais aucun modèle de conversation n’est listé pour ce compte.', models };
   } catch (e) {
-    return { ok: false, message: e instanceof ProviderError ? e.message : `Réseau indisponible : ${(e as Error).message}` };
+    return { ok: false, message: e instanceof ProviderError || e instanceof NetworkPolicyError ? e.message : 'Réseau indisponible : fournisseur injoignable.' };
   }
 }

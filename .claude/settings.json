@@ -1,0 +1,44 @@
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"
+  },
+  "permissions": {
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(git restore:*)",
+      "Bash(git checkout:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git tag:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash drop:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(rm:*)",
+      "Bash(npm install:*)",
+      "Bash(npm i:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm update:*)",
+      "Bash(npx playwright install:*)",
+      "Bash(vercel:*)",
+      "PowerShell(git commit:*)",
+      "PowerShell(git push:*)",
+      "PowerShell(git reset:*)",
+      "PowerShell(git merge:*)",
+      "PowerShell(git checkout:*)",
+      "PowerShell(git switch:*)",
+      "PowerShell(Remove-Item:*)",
+      "PowerShell(npm install:*)",
+      "PowerShell(vercel:*)"
+    ],
+    "deny": [
+      "Read(./data/auth-secret)",
+      "Read(./data/users.json)",
+      "Read(./.env)",
+      "Read(./.env.local)"
+    ]
+  }
+}

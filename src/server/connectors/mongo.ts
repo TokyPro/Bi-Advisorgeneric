@@ -1,8 +1,11 @@
 import type { TableSchema } from '@/lib/types';
+import { assertMongoUriAllowed } from '../net/policy';
 
 type Cfg = Record<string, string>;
 
 async function withMongo<T>(c: Cfg, fn: (db: import('mongodb').Db) => Promise<T>) {
+  // Contrôle des hôtes et options avant toute connexion. Pas d'épinglage possible (SRV, découverte de topologie) : risque résiduel R-2.
+  await assertMongoUriAllowed(c.url);
   const { MongoClient } = await import('mongodb');
   const client = new MongoClient(c.url, { serverSelectionTimeoutMS: 8000 });
   await client.connect();

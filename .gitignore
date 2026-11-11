@@ -6,3 +6,8 @@ node_modules/
 .env.local
 *.tsbuildinfo
 .DS_Store
+
+# État local des outils (orchestration OMC, sortie Vitest, préférences Claude personnelles)
+.omc/
+.vitest/
+.claude/settings.local.json
