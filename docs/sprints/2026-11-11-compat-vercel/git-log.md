@@ -24,11 +24,40 @@
 
 ## 2. Commits
 
-Aucun commit à ce stade (hors périmètre de la Tâche #5).
+Créés le 2026-11-16 par le `reviewer` (Tâche #2, suite), après l'accord humain « OK 8 commits + 9e » relayé par
+l'orchestrateur sur le plan du § 6. Base : `main` @ `3dc50cd`. Ajout explicite par chemin, sans `--no-verify`.
+
+| # | Hash | Message | Fichiers |
+|---|---|---|---|
+| 1 | `92fc505` | `feat(auth): ajouter la configuration, les erreurs typées et le hachage asynchrone` | `src/server/auth/{config,errors,password}.ts` (3 fichiers, +162) |
+| 2 | `5695cac` | `feat(auth): ajouter les backends de stockage fichier et PostgreSQL` | `src/server/auth/backends/{types,file,postgres,index}.ts` (4, +343) |
+| 3 | `26911a1` | `refactor(auth): migrer le store, la session, l'audit et les routes vers le stockage asynchrone` | `src/server/auth/{store,session,audit}.ts` + 13 routes `src/app/api/**/route.ts` (16, +230 / −171) |
+| 4 | `36294a4` | `feat(auth): gérer l'initialisation par jeton et les erreurs de stockage dans l'écran de connexion` | `src/lib/auth-client.ts`, `src/components/auth/AuthGate.tsx` (2, +176 / −38) |
+| 5 | `d654056` | `test(auth): couvrir la configuration, les backends, les routes et la garde des routes` | `tests/unit/{auth-config,auth-file-backend,auth-postgres-backend,auth-routes,auth-gherkin-gaps,route-guard}.test.ts` (6, +769) |
+| 6 | `3398d1d` | `docs(config): documenter le déploiement Vercel et les variables d'authentification` | `.env.example`, `README.md` (2, +82 / −9) |
+| 7 | `5b6dd1e` | `docs(adr): consigner l'ADR-001 sur le stockage de l'authentification` | `docs/adr/ADR-001-stockage-auth.md` (1, +75) |
+| 8 | `4362244` | `docs(sprint): livrables du sprint 2026-11-11-compat-vercel` | `docs/sprints/2026-11-11-compat-vercel/*.md` (10, +1939) |
+| 9 | (ce commit) | `docs(sprint): consigner les commits du sprint 2026-11-11-compat-vercel` | `docs/sprints/2026-11-11-compat-vercel/git-log.md` |
+
+Chaque message comporte un corps (le pourquoi), une ligne `Réf : …` et
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+**Vérifications sur l'état commité (après le commit 8)** : `npx tsc --noEmit` ✅ (0 erreur) · `npm test` ✅ 12 fichiers,
+650/650. `npm run build` n'a pas été relancé dans le dépôt, car le `next dev` du port 3000 partage `.next/`. Le dernier
+build est celui de la copie isolée (§ 5), réalisé sur un contenu identique.
 
 ## 3. Contrôles de secrets
 
-Sans objet à ce stade (aucun fichier indexé).
+Avant chaque commit : `git diff --cached --stat`, refus des chemins interdits (`data/`, `.env`, `.env.local`, `.omc/`,
+`.next/`, `node_modules/`, `*.tsbuildinfo`, `.bak`, sprint observability, ADR-002, `Accès.txt`), puis recherche des
+motifs de secrets dans les lignes ajoutées du diff indexé. Résultat : **aucun secret** dans les 9 commits. Une seule
+alerte, au commit 8, était un faux positif : la ligne du § 5 qui énumère les motifs recherchés. Elle a été vérifiée, puis
+exclue nommément.
+
+**Non commités (hors périmètre, laissés non suivis)** : `docs/sprints/2026-11-16-observability/**`,
+`docs/adr/ADR-002-stockage-mesures-observabilite.md` (autre sprint) et **`Accès.txt`** à la racine. Ce dernier est
+apparu pendant la tâche ; il n'a pas été lu. Son nom évoque des identifiants : il est **à ajouter à `.gitignore`**
+(ou à déplacer hors du dépôt) sur décision humaine.
 
 ## 4. Push / merge / PR
 
@@ -66,6 +95,8 @@ Branche courante : `feature/2026-11-11-compat-vercel`. Aucun fichier indexé, au
 - **Exclus du plan** : `docs/sprints/2026-11-16-observability/**` (autre sprint) ; aucun `docs/adr/ADR-002*` présent.
 
 ## 6. Plan de commits proposé (en attente d'OK humain)
+
+> **Exécuté le 2026-11-16** après l'accord « OK 8 commits + 9e » : voir le § 2 pour les hashes.
 
 Le découpage suit les tâches `T-n`, en respectant une contrainte : **chaque commit doit compiler**. Les tâches T-3 à T-7
 et T-10 changent ensemble l'API du store (passage en asynchrone, `authorize` remplace `requireAuth`) ; les séparer
