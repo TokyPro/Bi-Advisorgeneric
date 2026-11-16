@@ -2,13 +2,13 @@ import { NextRequest } from 'next/server';
 import { streamChat, ProviderError, BASEURL_PROVIDERS, BASEURL_UNSUPPORTED, type Provider } from '@/server/llm';
 import { NetworkPolicyError } from '@/server/net/policy';
 
-import { requireAuth } from '@/server/auth/session';
+import { authorize } from '@/server/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuth(req); if (auth instanceof Response) return auth;
+  const auth = await authorize(req); if (auth instanceof Response) return auth;
   try {
     const { provider, model, apiKey, system, messages, maxTokens, temperature, baseUrl } = await req.json();
     if (!apiKey && !(provider === 'nvidia' && baseUrl)) return Response.json({ error: 'Clé API manquante. Configurez votre LLM.' }, { status: 400 });
