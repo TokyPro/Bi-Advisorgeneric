@@ -66,13 +66,65 @@ ALTER ROLE db_datareader ADD MEMBER lecteur_bi;
 ```
 
 ## Authentification & utilisateurs
-- **Premier accès** : un écran vous demande de créer le compte administrateur (ou définissez `ADMIN_EMAIL` / `ADMIN_PASSWORD`, voir `.env.example`).
-- Comptes stockés dans `data/users.json` (mots de passe hachés **scrypt**, fichier en 600) ; session par cookie **HttpOnly / SameSite=Lax** signé HMAC (7 jours, `Secure` automatique en HTTPS). Changer ou réinitialiser un mot de passe, désactiver un compte ou changer un rôle **révoque immédiatement** les sessions concernées.
-- Toutes les routes `/api/*` exigent une session valide ; `/api/admin/*` exige le rôle administrateur ; contrôle d'origine (anti-CSRF) sur les requêtes modifiantes ; blocage 10 min après 5 échecs de connexion (par IP + e-mail) ; journal d'audit `data/audit.log`.
+- **Premier accès** : un écran vous demande de créer le compte administrateur (ou définissez `ADMIN_EMAIL` / `ADMIN_PASSWORD`, voir `.env.example`). Si `SETUP_TOKEN` est défini (32 caractères minimum), l'écran exige ce jeton ; sur un hébergement public (Vercel), l'initialisation est **désactivée** tant que ni `SETUP_TOKEN` ni `ADMIN_EMAIL` / `ADMIN_PASSWORD` ne sont définis.
+- **Stockage des comptes** : en local, `data/users.json` (mots de passe hachés **scrypt**, fichier en 600), sans aucun service externe ; en hébergé (Vercel, ou `BI_HOSTED=true`), une base **PostgreSQL dédiée** (`BI_AUTH_DATABASE_URL` ou `DATABASE_URL`, tables `bia_*`). Session par cookie **HttpOnly / SameSite=Lax** signé HMAC (7 jours, `Secure` automatique en HTTPS). Changer ou réinitialiser un mot de passe, désactiver un compte ou changer un rôle **révoque immédiatement** les sessions concernées, sur toutes les instances.
+- **`AUTH_SECRET`** : 16 caractères minimum ; obligatoire en hébergé (sinon « Configuration incomplète »). En local, s'il est absent, un secret est généré dans `data/auth-secret`.
+- Toutes les routes `/api/*` exigent une session valide ; `/api/admin/*` exige le rôle administrateur ; contrôle d'origine (anti-CSRF) sur les requêtes modifiantes ; blocage 10 min après 5 échecs de connexion (par IP + e-mail) ou 10 échecs (par e-mail), partagé entre instances en hébergé ; même limite (5 essais par IP) sur l'initialisation.
+- **Journal d'audit** : `data/audit.log` en local ; table `bia_auth_audit` en hébergé (consultable dans `/admin` > Utilisateurs, ou en SQL). Si l'écriture échoue, l'événement (sans secret) est émis dans les journaux de la plateforme (*Runtime Logs* sur Vercel, rétention courte) et la requête aboutit quand même.
 - **Rôles** : *Administrateur* (gestion des comptes, journal d'audit, diagnostic serveur) et *Utilisateur*. Chaque utilisateur a ses propres clés LLM, connexions et analyses : les données du navigateur sont **isolées par compte** (clés de stockage et coffre séparés).
 - Les données déjà présentes avant l'authentification sont reprises par le premier compte qui se connecte sur ce navigateur.
 - Mot de passe : 10 caractères minimum avec lettres et chiffres.
-- `AUTH_DISABLED=true` désactive l'authentification (poste local uniquement). En production : HTTPS obligatoire (reverse-proxy) et sauvegarde du dossier `data/`.
+- `AUTH_DISABLED=true` désactive l'authentification (poste local uniquement). En production : HTTPS obligatoire (reverse-proxy) et sauvegarde du dossier `data/` (mode fichier) ou de la base (mode PostgreSQL).
+- Mode fichier : un seul processus Node par dossier `data/` (les écritures sont sérialisées dans le processus, pas entre plusieurs processus).
+
+## Déployer sur Vercel
+> Ce guide vise un déploiement **Preview**. La **mise en production est déconseillée** tant que la recette P0 du sprint `2026-11-10-securite-p0` (connecteurs PostgreSQL, MySQL/MariaDB, SQL Server réels, routes LLM) n'a pas été rejouée.
+
+**1. Pré-requis** : un compte Vercel, le CLI (`npm i -g vercel`) et une base **PostgreSQL dédiée aux comptes**, jamais une base cliente. Le plus simple : *Vercel > Storage (Marketplace) > Neon*, qui injecte `DATABASE_URL` dans le projet. Prévoyez une branche Neon distincte pour Preview et pour Production.
+
+**2. Nom du projet** : le CLI refuse les majuscules et les espaces (un dossier nommé `Bi-Advisorgeneric` est rejeté). Liez le dépôt avec un nom en minuscules :
+```bash
+vercel link                               # à la question du nom du projet, saisir : bi-advisor
+vercel link --yes --project bi-advisor    # variante non interactive (vérifiez les options avec « vercel link --help »)
+```
+
+**3. Variables d'environnement** (*Settings > Environment Variables*, ou `vercel env add <NOM> preview`) :
+
+| Variable | Rôle | Obligatoire | Environnements |
+|---|---|---|---|
+| `AUTH_SECRET` | Signature des sessions, ≥ 16 caractères (32 recommandés), ex. `openssl rand -hex 32` | **Oui** | Preview, Production : **valeurs distinctes** |
+| `DATABASE_URL` ou `BI_AUTH_DATABASE_URL` | Base des comptes (URL « pooled », `sslmode=require`) ; `BI_AUTH_DATABASE_URL` est prioritaire | **Oui** | Preview, Production (branches Neon distinctes recommandées) |
+| `SETUP_TOKEN` | Jeton d'initialisation, ≥ 32 caractères, saisi dans l'écran d'initialisation ; à retirer après l'initialisation | L'un **ou** l'autre | Preview, Production |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` (`ADMIN_NAME`) | Création automatique de l'administrateur au premier accès ; retirez `ADMIN_PASSWORD` ensuite | L'un **ou** l'autre | Preview, Production |
+| `BI_AUTH_STORE` | Forcer `postgres` (`file` est refusé en hébergé) | Non | — |
+| `BI_HOSTED` | Hébergement sans disque persistant **hors** Vercel (sur Vercel : automatique) | Non | — |
+| `BI_ALLOWED_HOSTS`, `BI_NETWORK_POLICY` | Inchangés (voir `.env.example`) ; les cibles internes doivent être joignables depuis Vercel | Selon les besoins | Preview, Production |
+| `BI_SQLITE_DIR` | **Inutilisable sur Vercel** (disque éphémère) : ne pas définir | Non | — |
+
+Exemples **factices** uniquement : `AUTH_SECRET=remplacez-par-64-caracteres-hexadecimaux`, `SETUP_TOKEN=jeton-factice-a-remplacer-0123456789abcdef`. Ne commitez jamais de valeur réelle.
+
+**4. Déploiement et initialisation** : `vercel deploy` (Preview). Ouvrez l'URL : avec `SETUP_TOKEN`, saisissez le jeton puis créez le compte administrateur ; avec `ADMIN_*`, connectez-vous directement. Sans aucun des deux, l'écran « Initialisation non configurée » s'affiche et l'API refuse toute initialisation.
+
+**5. Limites** :
+- disque **éphémère** : SQLite et fichiers serveur indisponibles ; comptes et journal sont en base ;
+- les bases et API **internes** doivent être exposées et joignables depuis Vercel (et ajoutées à `BI_ALLOWED_HOSTS`) ;
+- gardez la **Deployment Protection** (Vercel Authentication) active sur les Preview ;
+- alignez la région des fonctions sur celle de la base (*Settings > Functions*) pour limiter la latence (une requête SQL par appel API) ;
+- `pg` fait partie des dépendances optionnelles : si son installation échoue, l'application répond « Service d'authentification momentanément indisponible » (pilotes visibles dans `/admin` > Vue d'ensemble).
+
+**6. Schéma** : créé automatiquement au premier accès. Pour un rôle PostgreSQL sans droit `CREATE`, exécutez-le au préalable :
+```sql
+CREATE TABLE IF NOT EXISTS bia_users (
+  id text PRIMARY KEY, email text NOT NULL, name text NOT NULL,
+  role text NOT NULL CHECK (role IN ('admin','user')), hash text NOT NULL, salt text NOT NULL,
+  created_at bigint NOT NULL, disabled boolean NOT NULL DEFAULT false,
+  token_version integer NOT NULL DEFAULT 1, last_login bigint);
+CREATE UNIQUE INDEX IF NOT EXISTS bia_users_email_uq ON bia_users (email);
+CREATE TABLE IF NOT EXISTS bia_login_attempts (key text PRIMARY KEY, n integer NOT NULL, until_ms bigint NOT NULL);
+CREATE TABLE IF NOT EXISTS bia_auth_audit (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now(),
+  event text NOT NULL, actor text NOT NULL, detail text NOT NULL DEFAULT '', ip text NOT NULL DEFAULT '');
+```
+Voir aussi les [Notes de migration](#notes-de-migration-correctifs-de-sécurité-de-novembre-2026).
 
 ## Page d'administration (`/admin`)
 Accessible depuis la barre latérale (« Administration »). Quatre sections :
@@ -111,6 +163,9 @@ Changements susceptibles de casser une installation existante :
 - **Redirections HTTP non suivies** (API REST, Odoo, URL de base LLM) : indiquez l'URL finale.
 - **URL de base LLM** : acceptée uniquement pour OpenAI, DeepSeek et NVIDIA NIM (refusée pour Anthropic et Gemini) ; en `http://`, uniquement pour un hôte en liste blanche.
 - **MongoDB** : options `proxyHost`, `tlsCAFile`, `tlsCertificateKeyFile`, `authMechanismProperties`, `srvServiceName` et mécanismes `MONGODB-AWS`, `MONGODB-OIDC`, `GSSAPI`, `MONGODB-X509`, `PLAIN` refusés.
+- **`AUTH_SECRET` trop court refusé** : une valeur définie de moins de 16 caractères était ignorée en silence ; elle bloque désormais la connexion (« Configuration incomplète »), y compris en local. Allongez-la ou supprimez la variable (en local, un secret est alors généré dans `data/auth-secret`).
+- **Initialisation sur un hébergement public** : sur Vercel (ou `BI_HOSTED=true`), la création du premier administrateur exige `SETUP_TOKEN` ou passe par `ADMIN_EMAIL` / `ADMIN_PASSWORD` ; sans l'un ni l'autre, elle est désactivée. En local, si `SETUP_TOKEN` est défini, le jeton est aussi exigé. Voir [Déployer sur Vercel](#déployer-sur-vercel).
+- **Contributeurs** : `requireAuth` (synchrone) est remplacé par `authorize` (asynchrone). Toute route protégée commence par `const a = await authorize(req); if (a instanceof Response) return a;` : sans `await`, le contrôle serait silencieusement contourné ; le test `tests/unit/route-guard.test.ts` l'interdit. Les fonctions de `src/server/auth/store.ts` et `audit.ts` sont désormais asynchrones.
 
 ## Fonctionnalités BI
 Auto-EDA à la connexion (3–5 questions, générées par le LLM ou heuristique), détection d'anomalies (pics/creux/baisses signalés sur les graphiques), rapport exécutif (Markdown + annexes graphiques, export PDF), exports PNG / CSV / Excel, widgets réorganisables par glisser-déposer, citation de tables avec `@`, bascule de modèle à chaud, thème clair/sombre.
