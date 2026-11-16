@@ -1,94 +1,80 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
+import { getBackend } from './backends';
+import type { PublicUser, Role, User } from './backends/types';
+import { DomainError } from './errors';
+import { hashPassword, validatePassword } from './password';
 
-/** Stockage des comptes : fichier JSON (data/users.json, permissions 600) — mots de passe hachés scrypt. */
-export const DATA_DIR = process.env.BI_DATA_DIR || path.join(process.cwd(), 'data');
-const USERS = path.join(DATA_DIR, 'users.json');
-
-export type Role = 'admin' | 'user';
-export interface User { id: string; email: string; name: string; role: Role; hash: string; salt: string; createdAt: number; disabled?: boolean; tokenVersion: number; lastLogin?: number }
-export type PublicUser = Pick<User, 'id' | 'email' | 'name' | 'role' | 'createdAt' | 'disabled' | 'lastLogin'>;
-
-const ensureDir = () => fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-function read(): User[] { try { return JSON.parse(fs.readFileSync(USERS, 'utf8')); } catch { return []; } }
-function write(u: User[]) { ensureDir(); const tmp = USERS + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(u, null, 2), { mode: 0o600 }); fs.renameSync(tmp, USERS); }
+/**
+ * Façade domaine des comptes (asynchrone) : validation, hachage HORS section critique, invariants délégués au backend
+ * (fichier en local, PostgreSQL en hébergé — voir config.ts).
+ */
+export type { PublicUser, Role, User };
+export { checkPassword, validatePassword } from './password';
 
 export const pub = (u: User): PublicUser => ({ id: u.id, email: u.email, name: u.name, role: u.role, createdAt: u.createdAt, disabled: u.disabled, lastLogin: u.lastLogin });
 
-export function hashPassword(pw: string, salt = crypto.randomBytes(16).toString('hex')) {
-  return { salt, hash: crypto.scryptSync(pw, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }).toString('hex') };
-}
-export function checkPassword(u: User | undefined, pw: string) {
-  // calcul factice si l'utilisateur n'existe pas : temps de réponse constant
-  const s = u?.salt ?? 'f'.repeat(32);
-  const h = Buffer.from(hashPassword(pw, s).hash, 'hex');
-  const ref = Buffer.from(u?.hash ?? '0'.repeat(128), 'hex');
-  return !!u && h.length === ref.length && crypto.timingSafeEqual(h, ref);
-}
-
-export function validatePassword(pw: string) {
-  if (pw.length < 10) return 'Le mot de passe doit contenir au moins 10 caractères.';
-  if (!/[a-zA-Z]/.test(pw) || !/[0-9]/.test(pw)) return 'Le mot de passe doit contenir des lettres et des chiffres.';
-  return null;
-}
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const normalizeEmail = (e: unknown) => String(e ?? '').trim().toLowerCase();
 
-export const listUsers = () => read();
-export const countUsers = () => read().length;
-export const findByEmail = (e: string) => read().find((u) => u.email === e.trim().toLowerCase());
-export const findById = (id: string) => read().find((u) => u.id === id);
+export const listUsers = async () => (await getBackend()).list();
+export const countUsers = async () => (await getBackend()).count();
+export const findByEmail = async (e: string) => (await getBackend()).findByEmail(normalizeEmail(e));
+export const findById = async (id: string) => (await getBackend()).findById(String(id));
 
-export function createUser(p: { email: string; name: string; role: Role; password: string }): User {
-  const email = p.email.trim().toLowerCase();
-  if (!EMAIL.test(email)) throw new Error('Adresse e-mail invalide.');
-  if (!p.name.trim()) throw new Error('Nom requis.');
-  const bad = validatePassword(p.password); if (bad) throw new Error(bad);
-  const all = read();
-  if (all.some((u) => u.email === email)) throw new Error('Cet e-mail est déjà utilisé.');
-  const u: User = { id: crypto.randomUUID(), email, name: p.name.trim().slice(0, 80), role: p.role === 'admin' ? 'admin' : 'user', ...hashPassword(p.password), createdAt: Date.now(), tokenVersion: 1 };
-  write([...all, u]);
-  return u;
+async function buildUser(p: { email: unknown; name: unknown; role: unknown; password: unknown }): Promise<User> {
+  const email = normalizeEmail(p.email);
+  const name = String(p.name ?? '').trim();
+  const password = String(p.password ?? '');
+  if (!EMAIL.test(email)) throw new DomainError('invalid', 'Adresse e-mail invalide.');
+  if (!name) throw new DomainError('invalid', 'Nom requis.');
+  const bad = validatePassword(password); if (bad) throw new DomainError('invalid', bad);
+  return { id: crypto.randomUUID(), email, name: name.slice(0, 80), role: p.role === 'admin' ? 'admin' : 'user', ...(await hashPassword(password)), createdAt: Date.now(), tokenVersion: 1 };
 }
 
-const activeAdmins = (all: User[]) => all.filter((u) => u.role === 'admin' && !u.disabled);
-
-export function updateUser(id: string, patch: { name?: string; role?: Role; disabled?: boolean; password?: string; lastLogin?: number }): User {
-  const all = read();
-  const u = all.find((x) => x.id === id);
-  if (!u) throw new Error('Utilisateur introuvable.');
-  const next = { ...u };
-  if (patch.name !== undefined) next.name = patch.name.trim().slice(0, 80) || u.name;
-  if (patch.role) next.role = patch.role;
-  if (patch.disabled !== undefined) next.disabled = patch.disabled;
-  if (patch.lastLogin) next.lastLogin = patch.lastLogin;
-  if (patch.password) { const bad = validatePassword(patch.password); if (bad) throw new Error(bad); Object.assign(next, hashPassword(patch.password)); }
-  if (patch.password || patch.disabled || (patch.role && patch.role !== u.role)) next.tokenVersion = u.tokenVersion + 1; // invalide les sessions existantes
-  const after = all.map((x) => (x.id === id ? next : x));
-  if (activeAdmins(all).length && !activeAdmins(after).length) throw new Error('Impossible : il doit rester au moins un administrateur actif.');
-  write(after);
-  return next;
+export async function createUser(p: { email: unknown; name: unknown; role: unknown; password: unknown }): Promise<User> {
+  const u = await buildUser(p);
+  return (await getBackend()).insert(u);
 }
 
-export function deleteUser(id: string) {
-  const all = read();
-  const after = all.filter((u) => u.id !== id);
-  if (after.length === all.length) throw new Error('Utilisateur introuvable.');
-  if (!activeAdmins(after).length) throw new Error('Impossible : il doit rester au moins un administrateur actif.');
-  write(after);
+/** Premier administrateur (setup ou seed) : atomique, le perdant d'une course reçoit `already_initialized`. */
+export async function createFirstAdmin(p: { email: unknown; name: unknown; password: unknown }): Promise<User> {
+  const u = await buildUser({ ...p, role: 'admin' });
+  return (await getBackend()).insert(u, { onlyIfEmpty: true });
 }
 
-/** Création du premier administrateur depuis l'environnement (déploiements automatisés). */
-export function seedFromEnv() {
-  if (countUsers() || !process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD) return;
-  try { createUser({ email: process.env.ADMIN_EMAIL, name: process.env.ADMIN_NAME || 'Administrateur', role: 'admin', password: process.env.ADMIN_PASSWORD }); } catch (e) { console.error('[auth] ADMIN_* invalide :', (e as Error).message); }
+export async function updateUser(id: string, patch: { name?: unknown; role?: unknown; disabled?: unknown; password?: unknown }): Promise<User> {
+  if (patch.role !== undefined && patch.role !== 'admin' && patch.role !== 'user') throw new DomainError('invalid', 'Rôle invalide.');
+  const role = patch.role as Role | undefined;
+  const name = patch.name === undefined ? undefined : String(patch.name);
+  const disabled = patch.disabled === undefined ? undefined : !!patch.disabled;
+  const password = patch.password ? String(patch.password) : '';
+  let hashed: { hash: string; salt: string } | null = null;
+  if (password) { const bad = validatePassword(password); if (bad) throw new DomainError('invalid', bad); hashed = await hashPassword(password); }
+  return (await getBackend()).update(String(id), (u) => {
+    const next = { ...u };
+    if (name !== undefined) next.name = name.trim().slice(0, 80) || u.name;
+    if (role) next.role = role;
+    if (disabled !== undefined) next.disabled = disabled;
+    if (hashed) Object.assign(next, hashed);
+    if (hashed || disabled || (role && role !== u.role)) next.tokenVersion = u.tokenVersion + 1; // invalide les sessions existantes
+    return next;
+  });
 }
 
-let cachedSecret: string | null = null;
-export function authSecret(): string {
-  if (process.env.AUTH_SECRET && process.env.AUTH_SECRET.length >= 16) return process.env.AUTH_SECRET;
-  if (cachedSecret) return cachedSecret;
-  const f = path.join(DATA_DIR, 'auth-secret');
-  try { cachedSecret = fs.readFileSync(f, 'utf8').trim(); } catch { ensureDir(); cachedSecret = crypto.randomBytes(32).toString('hex'); fs.writeFileSync(f, cachedSecret, { mode: 0o600 }); }
-  return cachedSecret;
+export const deleteUser = async (id: string) => (await getBackend()).remove(String(id));
+export const touchLogin = async (id: string) => (await getBackend()).touchLogin(id, Date.now());
+
+let seeded = false;
+/** Création du premier administrateur depuis l'environnement ; mémoïsé par instance pour éviter un `count` par requête. */
+export async function seedFromEnv() {
+  if (seeded) return;
+  const { ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME } = process.env;
+  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) return;
+  if ((await countUsers()) > 0) { seeded = true; return; }
+  try { await createFirstAdmin({ email: ADMIN_EMAIL, name: ADMIN_NAME || 'Administrateur', password: ADMIN_PASSWORD }); seeded = true; }
+  catch (e) {
+    if (!(e instanceof DomainError)) throw e;
+    seeded = true; // course perdue (déjà initialisé) ou valeurs invalides : inutile de recommencer à chaque requête
+    if (e.code !== 'already_initialized') console.error('[auth] ADMIN_* invalide :', e.message);
+  }
 }

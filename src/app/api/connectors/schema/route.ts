@@ -1,13 +1,13 @@
 import { NextRequest } from 'next/server';
 import { schema, friendly } from '@/server/connectors';
 
-import { requireAuth } from '@/server/auth/session';
+import { authorize } from '@/server/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuth(req); if (auth instanceof Response) return auth;
+  const auth = await authorize(req); if (auth instanceof Response) return auth;
   try {
     const { kind, config } = await req.json();
     const tables = await schema(kind, config || {});
